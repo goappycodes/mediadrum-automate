@@ -68,6 +68,7 @@ interface WpPost {
   status: string;
   title: { rendered: string };
   date: string;
+  meta?: Record<string, unknown>;
 }
 
 /** Confirms the credentials work and returns the authenticated user. */
@@ -221,10 +222,15 @@ export async function createPost(input: CreatePostInput): Promise<CreatedPost> {
   });
 
   // Rank Math SEO fields, best effort.
+  //
+  // WordPress silently drops unregistered meta keys rather than erroring, so a
+  // 200 here proves nothing. Confirm the value actually landed by reading it
+  // back off the response -- otherwise the caller would tell the author their
+  // meta description was saved when it was discarded.
   let metaWritten = false;
   if (input.metaDescription || input.focusKeyword) {
     try {
-      await wp(`/posts/${post.id}`, {
+      const updated = await wp<WpPost>(`/posts/${post.id}`, {
         method: "POST",
         body: JSON.stringify({
           meta: {
@@ -237,7 +243,18 @@ export async function createPost(input: CreatePostInput): Promise<CreatedPost> {
           },
         }),
       });
-      metaWritten = true;
+
+      const stored = updated.meta ?? {};
+      metaWritten = input.metaDescription
+        ? stored.rank_math_description === input.metaDescription
+        : stored.rank_math_focus_keyword === input.focusKeyword;
+
+      if (!metaWritten) {
+        console.warn(
+          `Rank Math meta keys are not registered for REST on ${env.wpUrl}; ` +
+            "the meta description was discarded. See README -> Known limitations.",
+        );
+      }
     } catch (error) {
       console.warn("Rank Math meta not writable over REST:", error);
     }

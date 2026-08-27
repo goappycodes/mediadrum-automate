@@ -247,9 +247,27 @@ src/app/
 - **Reddit rate-limits anonymous RSS.** Two of the three Reddit sources
   intermittently return 429 despite per-host throttling and a backed-off retry.
   They degrade gracefully — the run continues and `/admin` shows the status.
-- **Rank Math meta over REST** depends on the plugin registering its meta keys.
-  If the write is rejected, the meta description is put in the editor notes for
-  manual pasting instead.
+- **Rank Math meta over REST is currently discarded.** Verified against the live
+  site: `rank_math_description` and `rank_math_focus_keyword` are not registered
+  for REST, so WordPress accepts the request with a 200 and silently drops the
+  values. The client reads the meta back to detect this, and falls back to
+  putting the meta description in the author's editor notes for manual pasting.
+
+  To make it write properly, add this to the theme's `functions.php` or a small
+  site plugin — after that the fallback note stops appearing on its own:
+
+  ```php
+  add_action( 'init', function () {
+      foreach ( [ 'rank_math_description', 'rank_math_focus_keyword', 'rank_math_title' ] as $key ) {
+          register_post_meta( 'post', $key, [
+              'type'          => 'string',
+              'single'        => true,
+              'show_in_rest'  => true,
+              'auth_callback' => fn() => current_user_can( 'edit_posts' ),
+          ] );
+      }
+  } );
+  ```
 - **No featured image is set.** The draft carries a `featured_image_brief`
   telling the picture desk what to source; wiring it to an image API or the WP
   media library would be the natural next step.
