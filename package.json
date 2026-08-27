@@ -1,0 +1,37 @@
+{
+  "name": "mediadrum-automate",
+  "version": "1.0.0",
+  "description": "Daily news discovery, author-in-the-loop editorial briefs, and automated WordPress publishing for MediaDrumWorld.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "tsc --noEmit",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "node scripts/migrate.mjs --seed-only"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.121.0",
+    "@supabase/supabase-js": "^2.112.4",
+    "cheerio": "^1.2.0",
+    "fast-xml-parser": "^5.11.1",
+    "next": "^16.3.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "resend": "^6.24.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "dotenv": "^17.4.2",
+    "pg": "^8.23.0",
+    "postcss": "^8.5.26",
+    "server-only": "^0.0.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2"
+  },
+  "private": true
+}
