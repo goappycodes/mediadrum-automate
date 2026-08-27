@@ -18,7 +18,7 @@ export const CuratedStorySchema = z.object({
   key_facts: z
     .array(z.string())
     .min(3)
-    .max(8)
+    .max(6)
     .describe(
       "The load-bearing facts a writer must not get wrong: names, numbers, " +
         "dates, places. Each one must appear in the supplied material.",
@@ -48,7 +48,7 @@ export const CuratedStorySchema = z.object({
   headline_options: z
     .array(z.string())
     .min(3)
-    .max(4)
+    .max(3)
     .describe("Headline options, 55-70 characters, British English, no clickbait lies."),
 
   questions: z
@@ -83,12 +83,12 @@ export const CuratedStorySchema = z.object({
   suggested_tags: z
     .array(z.string())
     .min(4)
-    .max(10)
+    .max(8)
     .describe("Tags, preferring ones the site already uses."),
 
   seo: z.object({
     primary_keyword: z.string(),
-    secondary_keywords: z.array(z.string()).min(2).max(6),
+    secondary_keywords: z.array(z.string()).min(2).max(4),
     search_intent: z
       .string()
       .describe("Who is searching this, and what they want to find."),

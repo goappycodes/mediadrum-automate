@@ -2,7 +2,7 @@ import "server-only";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { env } from "../env";
 import type { DigestItemRow, SiteProfile } from "../types";
-import { anthropic, FALLBACK_BETA } from "./client";
+import { anthropic, fallbackParams } from "./client";
 import { AUTHOR_VOICE_CONTRACT, HOUSE_STYLE } from "./house-style";
 import { ArticleSchema, type Article } from "./schemas";
 
@@ -161,7 +161,7 @@ export async function writeArticle(input: WriteInput): Promise<WriteResult> {
     ...item.key_facts.map((fact) => `- ${fact}`),
     "",
     input.sourceText
-      ? [`Original article text (for accuracy only -- do not rewrite it):`, `"""`, input.sourceText.slice(0, 6_000), `"""`].join("\n")
+      ? [`Original article text (for accuracy only -- do not rewrite it):`, `"""`, input.sourceText.slice(0, 8_000), `"""`].join("\n")
       : `(Original article text was not retrievable. Work strictly from the facts above and do not add detail.)`,
     "",
     `# ${authorName}'s answers -- this is the article`,
@@ -198,10 +198,9 @@ export async function writeArticle(input: WriteInput): Promise<WriteResult> {
   const client = anthropic();
 
   const response = await client.beta.messages.parse({
-    model: env.model,
+    model: env.writingModel,
     max_tokens: 16_000,
-    betas: [FALLBACK_BETA],
-    fallbacks: "default",
+    ...fallbackParams(env.writingModel),
     thinking: { type: "adaptive" },
     system: [
       { type: "text", text: WRITER_ROLE },

@@ -129,6 +129,45 @@ Push to GitHub, import the repo in Vercel, and add every variable from
 
 ---
 
+## Test mode
+
+`EMAIL_TEST_MODE` is **on by default**. While it is on, every email — the daily
+brief and the "draft ready" notice — is redirected to `EMAIL_TEST_RECIPIENT`
+instead of the real author, and carries a banner naming who it was addressed to.
+No author receives anything. If test mode is on and no recipient is set,
+nothing is sent at all; that is the safe direction to fail in.
+
+Turning it off has to be deliberate — `EMAIL_TEST_MODE=false` — and should wait
+until a verified sending domain is in place.
+
+> **Resend needs a verified domain before this can email anyone else.** Until
+> `mediadrumworld.com` is verified at [resend.com/domains](https://resend.com/domains),
+> Resend refuses `newsroom@mediadrumworld.com` as a sender and only delivers to
+> the account owner's own address. Verifying the domain fixes both at once, and
+> is the one step standing between test mode and real delivery.
+
+---
+
+## What it costs
+
+Measured on real runs, not estimated:
+
+| Stage | Model | Tokens | Cost |
+| --- | --- | --- | --- |
+| Daily curation | `claude-sonnet-5`, effort `medium` | ~17k in / ~9k out | **$0.12** |
+| One article | `claude-opus-5`, effort `high` | ~4k in / ~5k out | **$0.15** |
+
+So roughly **$3.60/month** for the daily brief, plus about **$0.15 per article**
+actually commissioned. Curation on Opus at `high` cost $0.44 a run — 3.6× more —
+for no better a shortlist, which is why the two stages use different models.
+
+Levers, cheapest first: `CURATION_EFFORT=low`, `CURATION_MODEL=claude-haiku-4-5`,
+`DEEP_READ_COUNT` (fewer candidates read), `CURATION_TEXT_BUDGET` (less text per
+candidate). Leave `WRITING_MODEL` alone — the article is the product, it only
+runs when someone commissions it, and it is the cheap half of the bill anyway.
+
+---
+
 ## Day to day
 
 ### `/admin`
@@ -271,7 +310,12 @@ src/app/
 - **No featured image is set.** The draft carries a `featured_image_brief`
   telling the picture desk what to source; wiring it to an image API or the WP
   media library would be the natural next step.
-- **`google_news` links** are unwrapped from the redirector when the feed
-  exposes a direct publisher link; otherwise the redirect URL is kept and full
-  text extraction may fail for that candidate. It still gets curated on its
-  headline and feed summary.
+- **Google News links are unwrapped via an undocumented endpoint.** Their RSS
+  links point at a JS interstitial, not a 302, so the real publisher URL is
+  recovered through Google's own `batchexecute` RPC (`resolveGoogleNews` in
+  `src/lib/sources/extract.ts`). This lifted full-text extraction from 11/28 to
+  15/20 candidates and keeps `news.google.com` out of published citations — but
+  it is an internal endpoint and will break eventually. It fails soft: the
+  Google link is kept and the story is briefed from its headline, as before.
+  The tell is the `Fetched full text for N/M` line in the log dropping back
+  toward a third.

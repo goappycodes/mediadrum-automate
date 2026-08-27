@@ -49,6 +49,8 @@ const NOISE_SELECTORS = [
 
 export interface ExtractedArticle {
   url: string;
+  /** The publisher URL, once any Google News redirect has been unwrapped. */
+  resolvedUrl: string;
   title: string | null;
   text: string;
   imageUrl: string | null;
@@ -160,9 +162,96 @@ function fromDom($: cheerio.CheerioAPI): string {
     .join("\n\n");
 }
 
-export async function extractArticle(url: string): Promise<ExtractedArticle> {
+/**
+ * Google News RSS links point at a redirector, not the publisher, and the
+ * interstitial is a JS app rather than a 302 -- so following redirects just
+ * lands on google.com and extraction finds nothing. Before this existed, only
+ * 11 of 28 shortlisted candidates yielded any article text.
+ *
+ * The real destination comes back from Google's own `batchexecute` RPC, given
+ * the article id plus the signature and timestamp embedded in the page.
+ *
+ * This is an undocumented internal endpoint and will break at some point. It
+ * fails soft: the caller keeps the Google link and briefs from the headline,
+ * exactly as it did before, and `resolvedGoogleLinks` in the run stats makes a
+ * regression visible rather than silent.
+ */
+async function resolveGoogleNews(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+
+  if (!/(^|\.)news\.google\.com$/.test(parsed.hostname)) return url;
+
+  try {
+    const html = await fetchHtml(url);
+
+    const signature = html.match(/data-n-a-sg="([^"]+)"/)?.[1];
+    const timestamp = html.match(/data-n-a-ts="([^"]+)"/)?.[1];
+    const articleId = parsed.pathname.match(/\/articles\/([^?/]+)/)?.[1];
+
+    if (!signature || !timestamp || !articleId) return url;
+
+    const request = JSON.stringify([
+      "garturlreq",
+      [
+        ["X", "X", ["X", "X"], null, null, 1, 1, "US:en", null, 1, null, null, null, null, null, 0, 1],
+        "X", "X", 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0,
+      ],
+      articleId,
+      Number(timestamp),
+      signature,
+    ]);
+
+    const response = await fetch(
+      "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+      {
+        method: "POST",
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        body: new URLSearchParams({
+          "f.req": JSON.stringify([[["Fbv4je", request, null, "generic"]]]),
+        }).toString(),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      },
+    );
+
+    if (!response.ok) return url;
+
+    // The body is an anti-JSON-hijacking prefix followed by nested arrays,
+    // where the payload we want is itself a JSON string.
+    const envelope = JSON.parse(
+      (await response.text()).replace(/^\)\]\}'\s*/, ""),
+    ) as unknown[][];
+
+    for (const row of envelope) {
+      if (row?.[0] !== "wrb.fr" || row?.[1] !== "Fbv4je") continue;
+      const payload = JSON.parse(String(row[2])) as unknown[];
+      const resolved = payload[1];
+      if (typeof resolved === "string" && /^https?:\/\//.test(resolved)) {
+        return resolved;
+      }
+    }
+  } catch {
+    /* unreachable, changed shape, or rate-limited -- keep the Google link */
+  }
+
+  return url;
+}
+
+export async function extractArticle(
+  inputUrl: string,
+): Promise<ExtractedArticle> {
+  const url = await resolveGoogleNews(inputUrl).catch(() => inputUrl);
+
   const empty: ExtractedArticle = {
-    url,
+    url: inputUrl,
+    resolvedUrl: url,
     title: null,
     text: "",
     imageUrl: null,
@@ -191,7 +280,8 @@ export async function extractArticle(url: string): Promise<ExtractedArticle> {
       .slice(0, 12_000);
 
     return {
-      url,
+      url: inputUrl,
+      resolvedUrl: url,
       title: meta("og:title") ?? ($("h1").first().text().trim() || null),
       text,
       imageUrl: meta("og:image") ?? jsonLd.image,

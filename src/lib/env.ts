@@ -60,11 +60,33 @@ export const env = {
   get anthropicKey() {
     return required("ANTHROPIC_API_KEY");
   },
-  get model() {
-    return optional("ANTHROPIC_MODEL", "claude-opus-5");
+  /**
+   * Two stages, two models, because they are not the same job.
+   *
+   * Curation is triage over a long candidate list and runs every single day,
+   * so it dominates the bill -- Sonnet handles it well at ~40% of the cost.
+   * Drafting produces the actual published article, which is the one place
+   * where paying for the better model is worth it, and only runs when an
+   * author actually commissions something.
+   *
+   * `ANTHROPIC_MODEL` still overrides both, for a quick global switch.
+   */
+  get curationModel() {
+    return (
+      process.env.CURATION_MODEL ||
+      process.env.ANTHROPIC_MODEL ||
+      "claude-sonnet-5"
+    );
+  },
+  get writingModel() {
+    return (
+      process.env.WRITING_MODEL ||
+      process.env.ANTHROPIC_MODEL ||
+      "claude-opus-5"
+    );
   },
   get curationEffort() {
-    return optional("CURATION_EFFORT", "high") as
+    return optional("CURATION_EFFORT", "medium") as
       | "low"
       | "medium"
       | "high"
@@ -78,6 +100,10 @@ export const env = {
       | "high"
       | "xhigh"
       | "max";
+  },
+  /** Characters of source text sent per candidate. The main input-cost lever. */
+  get curationTextBudget() {
+    return num("CURATION_TEXT_BUDGET", 1_800);
   },
 
   // WordPress
@@ -115,12 +141,24 @@ export const env = {
     return Boolean(process.env.RESEND_API_KEY);
   },
 
+  /**
+   * Test mode redirects every outbound email to a single address, so a live
+   * run can be exercised end to end without any author receiving anything.
+   * Defaults to ON: switching it off has to be a deliberate act.
+   */
+  get emailTestMode() {
+    return (process.env.EMAIL_TEST_MODE ?? "true").toLowerCase() !== "false";
+  },
+  get emailTestRecipient() {
+    return process.env.EMAIL_TEST_RECIPIENT || "";
+  },
+
   // Discovery tuning
   get shortlistSize() {
     return num("SHORTLIST_SIZE", 5);
   },
   get deepReadCount() {
-    return num("DEEP_READ_COUNT", 28);
+    return num("DEEP_READ_COUNT", 20);
   },
   get maxStoryAgeHours() {
     return num("MAX_STORY_AGE_HOURS", 72);

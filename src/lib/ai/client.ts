@@ -22,3 +22,17 @@ export function anthropic(): Anthropic {
  * borderline story does not kill the whole daily run.
  */
 export const FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
+/** Models that accept `fallbacks`. Sending it to any other returns a 400. */
+const SUPPORTS_FALLBACKS = /^claude-(opus-5|fable-5|mythos-5|opus-4-8)/;
+
+/**
+ * Fallback request fields for a model, or nothing when it does not support
+ * them -- the curation stage runs on Sonnet by default, which rejects the
+ * parameter outright.
+ */
+export function fallbackParams(model: string) {
+  return SUPPORTS_FALLBACKS.test(model)
+    ? { betas: [FALLBACK_BETA], fallbacks: "default" as const }
+    : {};
+}

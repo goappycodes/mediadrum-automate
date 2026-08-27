@@ -14,7 +14,13 @@ import { curateStories } from "../ai/curate";
 import { renderBriefEmail } from "../email/templates";
 import { sendEmail } from "../email/send";
 import { issueToken } from "../tokens";
-import type { AuthorRow, DigestItemRow, SiteProfile, SourceRow } from "../types";
+import type {
+  AuthorRow,
+  DigestItemRow,
+  DigestRow,
+  SiteProfile,
+  SourceRow,
+} from "../types";
 
 export interface DiscoverResult {
   digestId: string;
@@ -30,6 +36,9 @@ export interface DiscoverResult {
   error?: string;
   durationMs: number;
 }
+
+/** After this long, a "running" digest is assumed dead and can be taken over. */
+const STALE_RUN_MS = 20 * 60 * 1000;
 
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
@@ -94,38 +103,95 @@ export async function runDiscovery(
     .eq("run_date", runDate)
     .maybeSingle();
 
-  if (existing && !options.force) {
-    if (existing.status === "sent" || existing.status === "running") {
-      return {
-        digestId: existing.id,
-        runDate,
-        status: "skipped",
-        scanned: existing.candidates_scanned,
-        kept: existing.candidates_kept,
-        shortlisted: 0,
-        sourcesOk: existing.sources_ok,
-        sourcesFailed: existing.sources_failed,
-        emailed: [],
-        durationMs: Date.now() - startedAt,
-      };
+  const skip = (reason: DigestRow) => ({
+    digestId: reason.id,
+    runDate,
+    status: "skipped" as const,
+    scanned: reason.candidates_scanned,
+    kept: reason.candidates_kept,
+    shortlisted: 0,
+    sourcesOk: reason.sources_ok,
+    sourcesFailed: reason.sources_failed,
+    emailed: [],
+    durationMs: Date.now() - startedAt,
+  });
+
+  // A run in flight is never interrupted, force or not. Curation is the
+  // expensive step and takes minutes; letting a second run start would both
+  // pay for it twice and pull the digest row out from under the first one.
+  if (existing?.status === "running") {
+    const runningFor = Date.now() - new Date(existing.started_at).getTime();
+    if (runningFor < STALE_RUN_MS) {
+      await log("discover", "warn", `A run started ${Math.round(runningFor / 1000)}s ago is still in flight; not starting another.`, undefined, existing.id);
+      return skip(existing as DigestRow);
     }
+    await log("discover", "warn", "Previous run looks stalled; taking it over.", undefined, existing.id);
   }
 
-  if (existing?.id && options.force) {
-    await db().from("digests").delete().eq("id", existing.id);
+  if (existing && !options.force && existing.status === "sent") {
+    return skip(existing as DigestRow);
   }
 
-  const { data: digest, error: digestError } = await db()
-    .from("digests")
-    .insert({ run_date: runDate, status: "running" })
-    .select()
-    .single();
+  // On a re-run, reuse the row and clear its items rather than deleting it.
+  // Deleting orphans any in-flight insert against its foreign key.
+  let runId: string;
 
-  if (digestError || !digest) {
-    throw new Error(`Could not start today's digest: ${digestError?.message}`);
+  if (existing) {
+    // Clear the old brief -- but never an item an author has already claimed.
+    // `submissions` cascades from `digest_items`, so a blanket delete here
+    // silently destroys someone's answers and the record of their draft.
+    const { data: oldItems } = await db()
+      .from("digest_items")
+      .select("id")
+      .eq("digest_id", existing.id);
+
+    const itemIds = (oldItems ?? []).map((row) => row.id);
+
+    if (itemIds.length) {
+      const { data: claims } = await db()
+        .from("submissions")
+        .select("digest_item_id")
+        .in("digest_item_id", itemIds);
+
+      const claimed = new Set((claims ?? []).map((row) => row.digest_item_id));
+      const disposable = itemIds.filter((id) => !claimed.has(id));
+
+      if (claimed.size) {
+        await log("discover", "info", `Keeping ${claimed.size} claimed ${claimed.size === 1 ? "story" : "stories"} from the previous brief.`, undefined, existing.id);
+      }
+      if (disposable.length) {
+        await db().from("digest_items").delete().in("id", disposable);
+      }
+    }
+
+    const { error } = await db()
+      .from("digests")
+      .update({
+        status: "running",
+        error: null,
+        candidates_scanned: 0,
+        candidates_kept: 0,
+        sources_ok: 0,
+        sources_failed: 0,
+        started_at: new Date().toISOString(),
+        sent_at: null,
+      })
+      .eq("id", existing.id);
+
+    if (error) throw new Error(`Could not restart today's digest: ${error.message}`);
+    runId = existing.id;
+  } else {
+    const { data: digest, error } = await db()
+      .from("digests")
+      .insert({ run_date: runDate, status: "running" })
+      .select()
+      .single();
+
+    if (error || !digest) {
+      throw new Error(`Could not start today's digest: ${error?.message}`);
+    }
+    runId = digest.id as string;
   }
-
-  const runId = digest.id as string;
 
   try {
     // ---- 2. What does this site actually publish? ---------------------------
@@ -252,8 +318,20 @@ export async function runDiscovery(
     await log("discover", "info", `Commissioned ${curation.stories.length} stories with ${curation.model}.`, { usage: curation.usage, rejected: curation.rejected_note }, runId);
 
     // ---- 8. Persist the brief ----------------------------------------------
+    // A re-run may have kept claimed items, which still hold their positions,
+    // so new stories are numbered after them: (digest_id, position) is unique.
+    const { data: heldRows } = await db()
+      .from("digest_items")
+      .select("position")
+      .eq("digest_id", runId)
+      .order("position", { ascending: false })
+      .limit(1);
+
+    const positionOffset = heldRows?.length ? heldRows[0].position + 1 : 0;
+
     const rows = curation.stories
-      .map((story, position) => {
+      .map((story, index) => {
+        const position = positionOffset + index;
         const candidate = shortlist[story.candidate_index];
         if (!candidate) return null;
 
@@ -264,12 +342,14 @@ export async function runDiscovery(
           position,
           source_headline: candidate.title,
           source_name: candidate.sourceName,
-          source_url: candidate.url,
+          // Prefer the unwrapped publisher link -- the finished article links
+          // to this, and a news.google.com redirect is a poor citation.
+          source_url: extracted?.resolvedUrl ?? candidate.url,
           source_published_at: candidate.publishedAt,
           image_url: candidate.imageUrl ?? extracted?.imageUrl ?? null,
           factual_summary: story.factual_summary,
           key_facts: story.key_facts,
-          source_excerpt: extracted?.ok ? extracted.text.slice(0, 6_000) : null,
+          source_excerpt: extracted?.ok ? extracted.text.slice(0, 12_000) : null,
           angle_title: story.angle_title,
           angle_pitch: story.angle_pitch,
           why_it_fits: story.why_it_fits,

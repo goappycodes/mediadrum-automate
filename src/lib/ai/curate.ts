@@ -4,7 +4,7 @@ import { env } from "../env";
 import type { SiteProfile } from "../types";
 import type { ScoredCandidate } from "../sources/rank";
 import type { ExtractedArticle } from "../sources/extract";
-import { anthropic, FALLBACK_BETA } from "./client";
+import { anthropic, fallbackParams } from "./client";
 import { HOUSE_STYLE } from "./house-style";
 import { CurationSchema, type Curation } from "./schemas";
 
@@ -98,7 +98,7 @@ function renderCandidates(
     .map((candidate, index) => {
       const extracted = articles.get(candidate.url);
       const body = extracted?.ok
-        ? extracted.text.slice(0, 3_500)
+        ? extracted.text.slice(0, env.curationTextBudget)
         : `[full text unavailable: ${extracted?.error ?? "not fetched"}]`;
 
       return [
@@ -159,10 +159,9 @@ export async function curateStories(
   const client = anthropic();
 
   const response = await client.beta.messages.parse({
-    model: env.model,
+    model: env.curationModel,
     max_tokens: 16_000,
-    betas: [FALLBACK_BETA],
-    fallbacks: "default",
+    ...fallbackParams(env.curationModel),
     thinking: { type: "adaptive" },
     system: [
       { type: "text", text: CURATION_ROLE },
